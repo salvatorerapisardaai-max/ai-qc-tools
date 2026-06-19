@@ -1,0 +1,5 @@
+# AI review step (optional — tool runs static-only without it)
+anthropic>=0.40.0
+
+# Development / CI
+pytest>=8.0.0
