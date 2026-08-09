@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai-qc-tools — un punteggio di qualità su cui bloccare una build</title>
+<meta name="description" content="Analizzatore di qualità del codice Python in un solo file: controlli AST deterministici, review AI opzionale con Claude, punteggio 0–100 e gate per la CI.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="ai-qc-tools — un punteggio di qualità su cui bloccare una build">
+<meta property="og:description" content="Controlli AST deterministici, review AI opzionale, punteggio 0–100, exit code per la CI. Provalo: il simulatore usa la formula reale.">
+<meta property="og:url" content="https://github.com/salvatorerapisardaai-max/ai-qc-tools">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+<style>
+  :root{
+    --ground:#E7EAEE;
+    --paper:#F7F8FA;
+    --paper-2:#EFF1F4;
+    --ink:#13171C;
+    --ink-2:#3D4650;
+    --ink-3:#6B7681;
+    --rule:#C6CDD5;
+    --rule-soft:#D9DEE4;
+    --high:#B3261E;
+    --med:#A96A06;
+    --low:#7E8894;
+    --pass:#1C6B4C;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    --sans: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+    --maxw: 1180px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.6;
+    /* faint plotter grid */
+    background-image:
+      linear-gradient(to right, rgba(19,23,28,.045) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(19,23,28,.045) 1px, transparent 1px);
+    background-size:28px 28px;
+  }
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  a{color:inherit}
+  ::selection{background:var(--high);color:#fff}
+  :focus-visible{outline:2px solid var(--high);outline-offset:3px}
+
+  /* ---------- masthead ---------- */
+  .masthead{
+    border-bottom:1px solid var(--ink);
+    background:var(--paper);
+  }
+  .masthead .wrap{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:16px;padding-top:14px;padding-bottom:14px;flex-wrap:wrap;
+  }
+  .brand{
+    font-family:var(--mono);font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    display:flex;align-items:center;gap:10px;
+  }
+  .brand .dot{width:9px;height:9px;background:var(--high);border-radius:50%;display:inline-block}
+  .mast-right{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .mast-meta{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--ink-3);text-transform:uppercase}
+  .langtog{display:inline-flex;border:1px solid var(--ink);background:var(--paper)}
+  .langtog button{
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+    background:none;border:0;padding:6px 11px;cursor:pointer;color:var(--ink-2);
+  }
+  .langtog button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+
+  /* ---------- hero ---------- */
+  .hero{padding:64px 0 56px;border-bottom:1px solid var(--rule)}
+  .hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:56px;align-items:start}
+  .eyebrow{
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--ink-3);margin:0 0 22px;display:flex;align-items:center;gap:12px;
+  }
+  .eyebrow::after{content:"";flex:1;height:1px;background:var(--rule)}
+  h1{
+    margin:0 0 22px;
+    font-size:clamp(2.3rem,5.2vw,3.55rem);
+    line-height:1.02;
+    letter-spacing:-.028em;
+    font-weight:700;
+    text-wrap:balance;
+  }
+  h1 em{font-style:normal;display:block;color:var(--ink-3)}
+  .lede{font-size:1.075rem;line-height:1.62;color:var(--ink-2);max-width:46ch;margin:0 0 26px}
+  .lede strong{color:var(--ink);font-weight:600}
+  .cta-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:30px}
+  .btn{
+    font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    text-decoration:none;padding:11px 18px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);
+    display:inline-block;transition:transform .12s ease, background .12s ease;
+  }
+  .btn:hover{transform:translateY(-2px)}
+  .btn.ghost{background:transparent;color:var(--ink)}
+  .btn.ghost:hover{background:var(--ink);color:var(--paper)}
+
+  .factstrip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--ink);border-bottom:1px solid var(--rule)}
+  .factstrip div{padding:14px 0}
+  .factstrip div + div{border-left:1px solid var(--rule-soft);padding-left:16px}
+  .fact-n{font-family:var(--mono);font-size:1.5rem;font-weight:600;display:block;line-height:1.1;font-variant-numeric:tabular-nums}
+  .fact-l{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+
+  /* ---------- instrument ---------- */
+  .instrument{
+    background:var(--paper);border:1px solid var(--ink);
+    box-shadow:6px 6px 0 rgba(19,23,28,.09);
+  }
+  .inst-head{
+    display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+    padding:11px 16px;border-bottom:1px solid var(--ink);background:var(--ink);color:var(--paper);
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  }
+  .inst-body{padding:22px 20px 20px}
+  .gauge-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  .gauge{flex:0 0 200px}
+  .readout{flex:1;min-width:170px}
+  .score-num{
+    font-family:var(--mono);font-weight:700;font-size:3.4rem;line-height:1;
+    font-variant-numeric:tabular-nums;letter-spacing:-.03em;display:block;
+  }
+  .score-den{font-family:var(--mono);font-size:1rem;color:var(--ink-3)}
+  .verdict{
+    display:inline-flex;align-items:center;gap:8px;margin-top:12px;
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+    padding:6px 11px;border:1px solid currentColor;
+  }
+  .verdict.pass{color:var(--pass)}
+  .verdict.fail{color:var(--high)}
+  .verdict .glyph{font-weight:700}
+  .formula{
+    margin-top:18px;padding:12px 14px;background:var(--paper-2);border-left:3px solid var(--rule);
+    font-family:var(--mono);font-size:11.5px;color:var(--ink-2);overflow-x:auto;white-space:nowrap;
+  }
+  .controls{margin-top:22px;border-top:1px solid var(--rule);padding-top:18px;display:grid;gap:14px}
+  .ctl{display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px}
+  .ctl-label{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);display:flex;align-items:center;gap:8px}
+  .sev-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .sev-high{background:var(--high)}.sev-med{background:var(--med)}.sev-low{background:var(--low)}
+  .stepper{display:inline-flex;align-items:center;border:1px solid var(--rule)}
+  .stepper button{
+    width:28px;height:28px;border:0;background:var(--paper-2);cursor:pointer;
+    font-family:var(--mono);font-size:14px;color:var(--ink);line-height:1;
+  }
+  .stepper button:hover{background:var(--ink);color:var(--paper)}
+  .stepper output{
+    min-width:52px;text-align:center;font-family:var(--mono);font-size:13px;
+    font-variant-numeric:tabular-nums;padding:0 6px;
+  }
+  input[type=range]{width:100%;accent-color:var(--high)}
+  .presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;padding-top:16px;border-top:1px solid var(--rule)}
+  .chip{
+    font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+    border:1px solid var(--rule);background:var(--paper-2);padding:7px 11px;cursor:pointer;color:var(--ink-2);
+  }
+  .chip:hover{border-color:var(--ink);color:var(--ink)}
+  .chip strong{color:var(--ink)}
+
+  /* ---------- sections ---------- */
+  section{padding:60px 0;border-bottom:1px solid var(--rule)}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+  .sec-num{font-family:var(--mono);font-size:11.5px;color:var(--high);letter-spacing:.1em}
+  h2{
+    margin:0 0 6px;font-size:clamp(1.5rem,3vw,2rem);letter-spacing:-.02em;line-height:1.14;
+    font-weight:700;text-wrap:balance;
+  }
+  .sec-sub{color:var(--ink-3);max-width:62ch;margin:0 0 32px;font-size:1rem}
+
+  .split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px}
+  .card{background:var(--paper);border:1px solid var(--rule);padding:22px}
+  .card h3{
+    margin:0 0 10px;font-size:1.02rem;font-weight:700;letter-spacing:-.01em;
+    display:flex;align-items:center;gap:9px;
+  }
+  .card p{margin:0;color:var(--ink-2);font-size:.94rem}
+  .card code{font-family:var(--mono);font-size:.86em;background:var(--paper-2);padding:1px 5px}
+  .tag{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--paper);background:var(--ink);padding:3px 7px}
+
+  /* rules table */
+  .tablewrap{overflow-x:auto;border:1px solid var(--ink);background:var(--paper)}
+  table{border-collapse:collapse;width:100%;min-width:560px}
+  thead th{
+    text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    padding:11px 14px;background:var(--ink);color:var(--paper);font-weight:400;
+  }
+  tbody td{padding:11px 14px;border-top:1px solid var(--rule-soft);font-size:.92rem;vertical-align:middle}
+  tbody tr{cursor:pointer;transition:background .1s ease}
+  tbody tr:hover{background:var(--paper-2)}
+  tbody tr:active{background:#E4E7EB}
+  .rule-id{font-family:var(--mono);font-size:.85rem}
+  .sev{
+    font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    padding:3px 8px;border:1px solid currentColor;white-space:nowrap;
+  }
+  .sev.h{color:var(--high)}.sev.m{color:var(--med)}.sev.l{color:var(--low)}
+  .addhint{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);letter-spacing:.08em;text-align:right;white-space:nowrap}
+  tbody tr:hover .addhint{color:var(--high)}
+
+  /* terminal */
+  .term{
+    background:#14181D;color:#D8DEE6;font-family:var(--mono);font-size:12.5px;line-height:1.75;
+    padding:18px 20px;overflow-x:auto;border:1px solid var(--ink);
+  }
+  .term .p{color:#6F7B88}
+  .term .k{color:#E0C07A}
+  .term .r{color:#E3766C}
+  .term .g{color:#7FB89B}
+  .termbar{
+    display:flex;gap:7px;align-items:center;padding:9px 14px;background:#20262D;border:1px solid var(--ink);border-bottom:0;
+  }
+  .termbar span{width:9px;height:9px;border-radius:50%;background:#454E58}
+  .termbar em{
+    font-style:normal;margin-left:8px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.12em;text-transform:uppercase;color:#7E8894;
+  }
+
+  .stack{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .stack li{
+    list-style:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.05em;
+    border:1px solid var(--rule);background:var(--paper);padding:8px 12px;
+  }
+  .stack li b{font-weight:700}
+  .stack li span{color:var(--ink-3)}
+
+  .quote{
+    border-left:3px solid var(--high);padding:6px 0 6px 22px;margin:0;
+    font-size:1.12rem;line-height:1.55;color:var(--ink);max-width:56ch;
+  }
+  .quote footer{
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-3);margin-top:14px;
+  }
+
+  footer.site{padding:40px 0 56px}
+  .foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;align-items:center}
+  .foot p{margin:0;font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--ink-3)}
+  .foot a{color:var(--ink);text-underline-offset:3px}
+
+  @media (max-width:900px){
+    .hero-grid{grid-template-columns:minmax(0,1fr);gap:38px}
+    .split{grid-template-columns:minmax(0,1fr)}
+    .hero{padding:44px 0 40px}
+    section{padding:46px 0}
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{transition:none !important;animation:none !important}
+  }
+</style>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span> ai-qc-tools</div>
+    <div class="mast-right">
+      <span class="mast-meta" data-it="Python 3.10+ · MIT · zero dipendenze" data-en="Python 3.10+ · MIT · zero dependencies">Python 3.10+ · MIT · zero dipendenze</span>
+      <div class="langtog" role="group" aria-label="Lingua / Language">
+        <button type="button" data-lang="it" aria-pressed="true">IT</button>
+        <button type="button" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow" data-it="Controllo qualità assistito da AI" data-en="AI-assisted quality control">Controllo qualità assistito da AI</p>
+      <h1 data-it="Un punteggio di qualità su cui bloccare una build." data-en="A quality score you can gate a build on.">Un punteggio di qualità su cui bloccare una build.</h1>
+      <p class="lede" data-it="La review “a sensazione” non scala. Le suite di analisi statica complete sono pesanti per i progetti piccoli. ai-qc-tools sta nel mezzo: uno script, zero configurazione, un numero da 0 a 100 e un exit code." data-en="Review by feel doesn’t scale. Full static-analysis suites are heavy for small projects. ai-qc-tools sits in between: one script, no configuration, a number from 0 to 100 and an exit code.">La review “a sensazione” non scala. Le suite di analisi statica complete sono pesanti per i progetti piccoli. ai-qc-tools sta nel mezzo: uno script, zero configurazione, un numero da 0 a 100 e un exit code.</p>
+      <div class="cta-row">
+        <a class="btn" href="https://github.com/salvatorerapisardaai-max/ai-qc-tools" data-it="Vedi il repository" data-en="View the repository">Vedi il repository</a>
+        <a class="btn ghost" href="#regole" data-it="Catalogo delle regole" data-en="Rule catalogue">Catalogo delle regole</a>
+      </div>
+      <div class="factstrip">
+        <div><span class="fact-n">9</span><span class="fact-l" data-it="regole attive" data-en="active rules">regole attive</span></div>
+        <div><span class="fact-n">328</span><span class="fact-l" data-it="righe, un solo file" data-en="lines, one file">righe, un solo file</span></div>
+        <div><span class="fact-n">0</span><span class="fact-l" data-it="dipendenze per analizzare" data-en="deps to analyse">dipendenze per analizzare</span></div>
+      </div>
+    </div>
+
+    <div class="instrument" id="sim">
+      <div class="inst-head">
+        <span data-it="Simulatore di punteggio" data-en="Score simulator">Simulatore di punteggio</span>
+        <span data-it="formula reale" data-en="real formula">formula reale</span>
+      </div>
+      <div class="inst-body">
+        <div class="gauge-row">
+          <div class="gauge">
+            <svg viewBox="0 0 200 122" style="width:100%;height:auto;display:block" role="img" aria-labelledby="gaugetitle">
+              <title id="gaugetitle">Quality score gauge</title>
+              <path d="M20 110 A80 80 0 0 1 180 110" fill="none" stroke="#D9DEE4" stroke-width="14"/>
+              <path id="arc" d="M20 110 A80 80 0 0 1 180 110" fill="none" stroke="#B3261E" stroke-width="14"
+                    stroke-dasharray="251.3" stroke-dashoffset="251.3" style="transition:stroke-dashoffset .5s cubic-bezier(.2,.7,.3,1), stroke .3s"/>
+              <!-- CI gate threshold at 60 -->
+              <line x1="122.3" y1="41.5" x2="127.8" y2="24.4" stroke="#13171C" stroke-width="2"/>
+              <g font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#6B7681">
+                <text x="14" y="120">0</text>
+                <text x="172" y="120">100</text>
+                <text x="131" y="22" fill="#13171C">60</text>
+              </g>
+              <line id="needle" x1="100" y1="110" x2="100" y2="42" stroke="#13171C" stroke-width="2.5"
+                    style="transition:transform .5s cubic-bezier(.2,.7,.3,1);transform-origin:100px 110px"/>
+              <circle cx="100" cy="110" r="5" fill="#13171C"/>
+            </svg>
+          </div>
+          <div class="readout">
+            <span class="score-num" id="score">70</span>
+            <span class="score-den">/ 100</span>
+            <div><span class="verdict pass" id="verdict"><span class="glyph">exit 0</span> <span id="verdicttext">build passa</span></span></div>
+          </div>
+        </div>
+
+        <div class="formula">100 − min(70, risk/LOC × 400) − (1 − docstring) × 20</div>
+
+        <div class="controls">
+          <div class="ctl">
+            <span class="ctl-label"><i class="sev-dot sev-high"></i> <span data-it="Gravità alta × 8.0" data-en="High severity × 8.0">Gravità alta × 8.0</span></span>
+            <span class="stepper"><button type="button" data-step="-1" data-target="high" aria-label="−">−</button><output id="out-high">0</output><button type="button" data-step="1" data-target="high" aria-label="+">+</button></span>
+          </div>
+          <div class="ctl">
+            <span class="ctl-label"><i class="sev-dot sev-med"></i> <span data-it="Gravità media × 3.0" data-en="Medium severity × 3.0">Gravità media × 3.0</span></span>
+            <span class="stepper"><button type="button" data-step="-1" data-target="med" aria-label="−">−</button><output id="out-med">0</output><button type="button" data-step="1" data-target="med" aria-label="+">+</button></span>
+          </div>
+          <div class="ctl">
+            <span class="ctl-label"><i class="sev-dot sev-low"></i> <span data-it="Gravità bassa × 0.5" data-en="Low severity × 0.5">Gravità bassa × 0.5</span></span>
+            <span class="stepper"><button type="button" data-step="-1" data-target="low" aria-label="−">−</button><output id="out-low">25</output><button type="button" data-step="1" data-target="low" aria-label="+">+</button></span>
+          </div>
+          <div>
+            <span class="ctl-label" style="justify-content:space-between"><span data-it="Righe di codice" data-en="Lines of code">Righe di codice</span> <output id="out-loc" style="font-size:12px">328</output></span>
+            <input type="range" id="loc" min="20" max="1200" step="4" value="328" aria-label="LOC">
+          </div>
+          <div>
+            <span class="ctl-label" style="justify-content:space-between"><span data-it="Copertura docstring" data-en="Docstring coverage">Copertura docstring</span> <output id="out-cov" style="font-size:12px">24%</output></span>
+            <input type="range" id="cov" min="0" max="100" step="1" value="24" aria-label="Docstring coverage">
+          </div>
+        </div>
+
+        <div class="presets">
+          <button type="button" class="chip" data-preset="self"><strong>ai_qc.py</strong> <span data-it="su sé stesso" data-en="on itself">su sé stesso</span></button>
+          <button type="button" class="chip" data-preset="bad"><strong>bad.py</strong> <span data-it="file volutamente pessimo" data-en="deliberately bad file">file volutamente pessimo</span></button>
+          <button type="button" class="chip" data-preset="clean"><strong data-it="pulito" data-en="clean">pulito</strong> <span data-it="documentato" data-en="documented">documentato</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">01</span><h2 data-it="La scelta di progetto che conta: l’AI è opzionale" data-en="The design decision that matters: the AI is optional">La scelta di progetto che conta: l’AI è opzionale</h2></div>
+    <p class="sec-sub" data-it="Senza chiave API lo strumento è completamente offline e deterministico. Con una chiave, la review del modello si somma ai risultati statici invece di sostituirli." data-en="Without an API key the tool is fully offline and deterministic. With a key, the model review is layered on top of the static findings rather than replacing them.">Senza chiave API lo strumento è completamente offline e deterministico. Con una chiave, la review del modello si somma ai risultati statici invece di sostituirli.</p>
+    <div class="split">
+      <div class="card">
+        <h3><span class="tag">static</span> <span data-it="Deterministico, senza secret" data-en="Deterministic, no secrets">Deterministico, senza secret</span></h3>
+        <p data-it="Lo stesso input produce sempre lo stesso punteggio: si può eseguire in CI su un fork, senza credenziali. Controlli su AST per la struttura reale del codice, più controlli riga per riga per ciò che l’AST non vede." data-en="The same input always produces the same score, so it runs in CI on a fork with no credentials. AST checks for real code structure, plus line-level checks for what the AST doesn’t see.">Lo stesso input produce sempre lo stesso punteggio: si può eseguire in CI su un fork, senza credenziali. Controlli su AST per la struttura reale del codice, più controlli riga per riga per ciò che l’AST non vede.</p>
+      </div>
+      <div class="card">
+        <h3><span class="tag">+ claude</span> <span data-it="Review da senior, a budget noto" data-en="Senior review, on a known budget">Review da senior, a budget noto</span></h3>
+        <p data-html data-it="Solo gli N file più rischiosi (default 5) vengono inviati a Claude, con il sorgente troncato a 6 000 caratteri per restare in un budget di token prevedibile. Il pacchetto &lt;code&gt;anthropic&lt;/code&gt; è importato in modo lazy: chiave assente o chiamata fallita ricadono sulla sola analisi statica invece di far crashare il tool." data-en="Only the N riskiest files (5 by default) are sent to Claude, with the source truncated to 6,000 characters to stay inside a predictable token budget. The &lt;code&gt;anthropic&lt;/code&gt; package is imported lazily: a missing key or a failed call falls back to static-only instead of crashing.">Solo gli N file più rischiosi (default 5) vengono inviati a Claude, con il sorgente troncato a 6 000 caratteri per restare in un budget di token prevedibile. Il pacchetto <code>anthropic</code> è importato in modo lazy: chiave assente o chiamata fallita ricadono sulla sola analisi statica invece di far crashare il tool.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="regole">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">02</span><h2 data-it="Catalogo delle regole" data-en="Rule catalogue">Catalogo delle regole</h2></div>
+    <p class="sec-sub" data-it="Nove regole, tre livelli di gravità. Clicca una riga per aggiungerla al simulatore qui sopra e guardare il punteggio muoversi." data-en="Nine rules, three severity levels. Click a row to add it to the simulator above and watch the score move.">Nove regole, tre livelli di gravità. Clicca una riga per aggiungerla al simulatore qui sopra e guardare il punteggio muoversi.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-it="Regola" data-en="Rule">Regola</th>
+            <th data-it="Gravità" data-en="Severity">Gravità</th>
+            <th data-it="Cosa intercetta" data-en="What it catches">Cosa intercetta</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rules">
+          <tr data-sev="high"><td class="rule-id">syntax-error</td><td><span class="sev h" data-it="alta" data-en="high">alta</span></td><td data-it="Il file non è parsabile" data-en="File does not parse">Il file non è parsabile</td><td class="addhint">+ 8.0</td></tr>
+          <tr data-sev="high"><td class="rule-id">bare-except</td><td><span class="sev h" data-it="alta" data-en="high">alta</span></td><td data-it="except: che ingoia qualsiasi errore" data-en="except: swallowing every error">except: che ingoia qualsiasi errore</td><td class="addhint">+ 8.0</td></tr>
+          <tr data-sev="high"><td class="rule-id">dangerous-call</td><td><span class="sev h" data-it="alta" data-en="high">alta</span></td><td data-it="Chiamate a eval o exec" data-en="Calls to eval or exec">Chiamate a eval o exec</td><td class="addhint">+ 8.0</td></tr>
+          <tr data-sev="med"><td class="rule-id">long-function</td><td><span class="sev m" data-it="media" data-en="medium">media</span></td><td data-it="Corpo di funzione oltre 60 righe" data-en="Function body longer than 60 lines">Corpo di funzione oltre 60 righe</td><td class="addhint">+ 3.0</td></tr>
+          <tr data-sev="low"><td class="rule-id">too-many-args</td><td><span class="sev l" data-it="bassa" data-en="low">bassa</span></td><td data-it="Più di 6 argomenti" data-en="More than 6 arguments">Più di 6 argomenti</td><td class="addhint">+ 0.5</td></tr>
+          <tr data-sev="low"><td class="rule-id">missing-docstring</td><td><span class="sev l" data-it="bassa" data-en="low">bassa</span></td><td data-it="Modulo, classe o funzione senza docstring" data-en="Module, class or function without a docstring">Modulo, classe o funzione senza docstring</td><td class="addhint">+ 0.5</td></tr>
+          <tr data-sev="low"><td class="rule-id">long-line</td><td><span class="sev l" data-it="bassa" data-en="low">bassa</span></td><td data-it="Riga oltre 120 caratteri" data-en="Line longer than 120 characters">Riga oltre 120 caratteri</td><td class="addhint">+ 0.5</td></tr>
+          <tr data-sev="low"><td class="rule-id">stray-print</td><td><span class="sev l" data-it="bassa" data-en="low">bassa</span></td><td data-it="print( fuori da un commento" data-en="print( outside a comment">print( fuori da un commento</td><td class="addhint">+ 0.5</td></tr>
+          <tr data-sev="low"><td class="rule-id">todo-marker</td><td><span class="sev l" data-it="bassa" data-en="low">bassa</span></td><td data-it="TODO / FIXME / XXX non risolti" data-en="Unresolved TODO / FIXME / XXX">TODO / FIXME / XXX non risolti</td><td class="addhint">+ 0.5</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">03</span><h2 data-it="Nella CI, senza secret" data-en="In CI, without secrets">Nella CI, senza secret</h2></div>
+    <p class="sec-sub" data-html data-it="Il workflow installa le dipendenze, esegue i test, lancia l’analizzatore con &lt;code&gt;--no-ai&lt;/code&gt; e carica il report come artifact della build. Sotto 60, la build fallisce." data-en="The workflow installs dependencies, runs the tests, runs the analyzer with &lt;code&gt;--no-ai&lt;/code&gt; and uploads the report as a build artifact. Below 60, the build fails.">Il workflow installa le dipendenze, esegue i test, lancia l’analizzatore con <code>--no-ai</code> e carica il report come artifact della build. Sotto 60, la build fallisce.</p>
+    <div class="termbar"><span></span><span></span><span></span><em>qc.yml — github actions</em></div>
+    <div class="term"><span class="p">$</span> python ai_qc.py ai_qc.py --no-ai
+<span class="k"># 🤖 AI Quality-Control Report</span>
+
+<span class="k">Quality score:</span>  <span class="g">70/100</span>
+<span class="k">Files analysed:</span> 1
+<span class="k">Findings:</span>       0 high · 0 medium · 25 low
+<span class="k">AI review:</span>      static-only (no API key)
+<span class="p">exit 0</span>
+
+<span class="p">$</span> python ai_qc.py bad.py --no-ai
+<span class="k">Quality score:</span>  <span class="r">10/100</span>
+<span class="k">Findings:</span>       2 high · 0 medium · 3 low
+<span class="r">exit 1 — build failed</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">04</span><h2 data-it="Stack e test" data-en="Stack and tests">Stack e test</h2></div>
+    <ul class="stack">
+      <li><b>Python 3.10+</b> <span data-it="solo standard library per l’analisi" data-en="stdlib only for the analysis">solo standard library per l’analisi</span></li>
+      <li><b>ast · argparse · dataclasses · pathlib · json</b></li>
+      <li><b>anthropic ≥ 0.40</b> <span data-it="opzionale" data-en="optional">opzionale</span></li>
+      <li><b>pytest ≥ 8</b> <span data-it="6 test end-to-end" data-en="6 end-to-end tests">6 test end-to-end</span></li>
+      <li><b>GitHub Actions</b> <span data-it="gate sulla build" data-en="build gate">gate sulla build</span></li>
+    </ul>
+    <div class="split" style="margin-top:28px">
+      <div class="card">
+        <h3 data-it="Prompt versionati" data-en="Versioned prompts">Prompt versionati</h3>
+        <p data-it="prompts/code_review.md documenta il prompt e il ragionamento dietro ogni sua parte. È un artefatto revisionabile come qualunque altro sorgente, non una stringa sepolta nel codice." data-en="prompts/code_review.md documents the prompt and the reasoning behind each of its parts. It is a reviewable artifact like any other source file, not a string buried in the code.">prompts/code_review.md documenta il prompt e il ragionamento dietro ogni sua parte. È un artefatto revisionabile come qualunque altro sorgente, non una stringa sepolta nel codice.</p>
+      </div>
+      <div class="card">
+        <h3 data-it="Sei test, i punti che contano" data-en="Six tests, the points that matter">Sei test, i punti che contano</h3>
+        <p data-html data-it="Un file pulito non produce risultati di gravità alta; &lt;code&gt;bare-except&lt;/code&gt; ed &lt;code&gt;eval&lt;/code&gt; vengono segnalati; gli errori di sintassi sono intercettati invece che sollevati; il punteggio distingue il codice buono da quello cattivo; il conteggio righe gestisce file vuoti e newline finali." data-en="A clean file produces no high-severity findings; &lt;code&gt;bare-except&lt;/code&gt; and &lt;code&gt;eval&lt;/code&gt; are flagged; syntax errors are caught rather than raised; the score discriminates good code from bad; line counting handles empty files and trailing newlines.">Un file pulito non produce risultati di gravità alta; <code>bare-except</code> ed <code>eval</code> vengono segnalati; gli errori di sintassi sono intercettati invece che sollevati; il punteggio distingue il codice buono da quello cattivo; il conteggio righe gestisce file vuoti e newline finali.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="border-bottom:0">
+  <div class="wrap">
+    <blockquote class="quote">
+      <span data-it="“Volevo un modo riproducibile per tenere la qualità misurabile invece che affidata alle sensazioni. Trattare il prompt come un artefatto versionato e revisionabile fa parte della stessa idea.”" data-en="“I wanted a reproducible way to keep quality measurable rather than vibes-based. Treating the prompt as a versioned, reviewable artifact is part of the same idea.”">“Volevo un modo riproducibile per tenere la qualità misurabile invece che affidata alle sensazioni. Trattare il prompt come un artefatto versionato e revisionabile fa parte della stessa idea.”</span>
+      <footer>Salvatore Rapisarda</footer>
+    </blockquote>
+  </div>
+</section>
+</main>
+
+<footer class="site">
+  <div class="wrap foot">
+    <p>MIT © Salvatore Rapisarda</p>
+    <p><a href="https://github.com/salvatorerapisardaai-max/ai-qc-tools">github.com/salvatorerapisardaai-max/ai-qc-tools</a></p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------- language ---------- */
+  var nodes = document.querySelectorAll("[data-it][data-en]");
+  var buttons = document.querySelectorAll(".langtog button");
+  function setLang(lang){
+    nodes.forEach(function(n){
+      var txt = n.getAttribute("data-" + lang);
+      /* authored copy only — data-html marks strings that carry inline <code> */
+      if (n.hasAttribute("data-html")) { n.innerHTML = txt; } else { n.textContent = txt; }
+    });
+    buttons.forEach(function(b){ b.setAttribute("aria-pressed", String(b.dataset.lang === lang)); });
+    document.documentElement.lang = lang;
+    render();
+  }
+  buttons.forEach(function(b){ b.addEventListener("click", function(){ setLang(b.dataset.lang); }); });
+
+  /* ---------- score simulator ---------- */
+  var state = { high:0, med:0, low:25, loc:328, cov:24 };
+  var WEIGHT = { high:8.0, med:3.0, low:0.5 };
+  var ARC = 251.3;
+
+  var el = {
+    score: document.getElementById("score"),
+    arc: document.getElementById("arc"),
+    needle: document.getElementById("needle"),
+    verdict: document.getElementById("verdict"),
+    verdictText: document.getElementById("verdicttext"),
+    loc: document.getElementById("loc"),
+    cov: document.getElementById("cov")
+  };
+
+  function scoreOf(s){
+    var risk = s.high*WEIGHT.high + s.med*WEIGHT.med + s.low*WEIGHT.low;
+    var density = s.loc > 0 ? risk / s.loc : 0;
+    var raw = 100 - Math.min(70, density * 400) - (1 - s.cov/100) * 20;
+    return Math.max(0, Math.min(100, Math.round(raw)));
+  }
+
+  function colourFor(v){ return v >= 75 ? "#1C6B4C" : v >= 60 ? "#A96A06" : "#B3261E"; }
+
+  function render(){
+    ["high","med","low"].forEach(function(k){ document.getElementById("out-"+k).textContent = state[k]; });
+    document.getElementById("out-loc").textContent = state.loc;
+    document.getElementById("out-cov").textContent = state.cov + "%";
+    el.loc.value = state.loc; el.cov.value = state.cov;
+
+    var v = scoreOf(state);
+    el.score.textContent = v;
+    el.arc.setAttribute("stroke-dashoffset", String(ARC * (1 - v/100)));
+    el.arc.setAttribute("stroke", colourFor(v));
+    el.needle.style.transform = "rotate(" + (-90 + v * 1.8) + "deg)";
+
+    var pass = v >= 60;
+    var lang = document.documentElement.lang === "en" ? "en" : "it";
+    el.verdict.className = "verdict " + (pass ? "pass" : "fail");
+    el.verdict.querySelector(".glyph").textContent = pass ? "exit 0" : "exit 1";
+    el.verdictText.textContent = pass
+      ? (lang === "en" ? "build passes" : "build passa")
+      : (lang === "en" ? "build fails" : "build bloccata");
+  }
+
+  document.querySelectorAll(".stepper button").forEach(function(b){
+    b.addEventListener("click", function(){
+      var k = b.dataset.target;
+      state[k] = Math.max(0, Math.min(400, state[k] + Number(b.dataset.step)));
+      render();
+    });
+  });
+  el.loc.addEventListener("input", function(){ state.loc = Number(el.loc.value); render(); });
+  el.cov.addEventListener("input", function(){ state.cov = Number(el.cov.value); render(); });
+
+  var PRESETS = {
+    self:  { high:0, med:0, low:25, loc:328, cov:24 },
+    bad:   { high:2, med:0, low:3,  loc:20,  cov:0  },
+    clean: { high:0, med:0, low:2,  loc:240, cov:100 }
+  };
+  document.querySelectorAll("[data-preset]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var p = PRESETS[b.dataset.preset];
+      Object.keys(p).forEach(function(k){ state[k] = p[k]; });
+      render();
+    });
+  });
+
+  /* click a rule row to feed the simulator */
+  document.querySelectorAll("#rules tr").forEach(function(tr){
+    tr.addEventListener("click", function(){
+      state[tr.dataset.sev] += 1;
+      render();
+      document.getElementById("sim").scrollIntoView({ behavior:"smooth", block:"center" });
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
